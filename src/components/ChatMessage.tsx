@@ -1,4 +1,4 @@
-import { User, Bot, Scale, FileText } from "lucide-react";
+import { User, Bot, Scale, FileText, Heart } from "lucide-react";
 
 interface ChatMessageProps {
   message: string;
@@ -7,6 +7,7 @@ interface ChatMessageProps {
   laymanExplanation?: string;
   sources?: number[];
   isTyping?: boolean;
+  timestamp: Date;
 }
 
 export default function ChatMessage({
@@ -15,16 +16,29 @@ export default function ChatMessage({
   legalAnswer,
   laymanExplanation,
   sources,
-  isTyping
+  isTyping,
+  timestamp
 }: ChatMessageProps) {
+  const formatTime = (date: Date) => {
+    return new Date(date).toLocaleTimeString('en-US', { 
+      hour: '2-digit', 
+      minute: '2-digit' 
+    });
+  };
   if (sender === "user") {
     return (
       <div className="flex gap-3 animate-fade-in">
-        <div className="w-8 h-8 rounded-full bg-secondary flex items-center justify-center flex-shrink-0">
-          <User className="h-4 w-4 text-muted-foreground" />
+        <div className="w-9 h-9 rounded-full bg-secondary flex items-center justify-center flex-shrink-0">
+          <User className="h-5 w-5 text-muted-foreground" />
         </div>
-        <div className="message-user rounded-2xl px-4 py-3 max-w-[70%]">
-          <p>{message}</p>
+        <div className="flex-1">
+          <div className="flex items-baseline gap-2 mb-1">
+            <span className="text-sm font-medium">You</span>
+            <span className="text-xs text-muted-foreground">{formatTime(timestamp)}</span>
+          </div>
+          <div className="message-user rounded-2xl px-4 py-3 inline-block max-w-[85%]">
+            <p>{message}</p>
+          </div>
         </div>
       </div>
     );
@@ -32,10 +46,15 @@ export default function ChatMessage({
 
   return (
     <div className="flex gap-3 animate-fade-in">
-      <div className="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center flex-shrink-0">
-        <Scale className="h-4 w-4 text-primary" />
+      <div className="w-9 h-9 rounded-full bg-gradient-to-br from-primary/30 to-accent/20 flex items-center justify-center flex-shrink-0">
+        <Scale className="h-5 w-5 text-primary" />
       </div>
-      <div className="flex-1 max-w-[80%]">
+      <div className="flex-1">
+        <div className="flex items-baseline gap-2 mb-1">
+          <span className="text-sm font-medium text-primary">LawGPT</span>
+          <Heart className="h-3 w-3 text-primary/60" />
+          {!isTyping && <span className="text-xs text-muted-foreground">{formatTime(timestamp)}</span>}
+        </div>
         {isTyping ? (
           <div className="message-bot rounded-2xl px-4 py-3 inline-block">
             <div className="flex gap-2">
@@ -61,10 +80,10 @@ export default function ChatMessage({
             {laymanExplanation && (
               <div className="layman-box">
                 <div className="flex items-center gap-2 mb-2">
-                  <Bot className="h-4 w-4 text-primary" />
-                  <span className="text-sm font-semibold text-primary">Simple Explanation</span>
+                  <Heart className="h-4 w-4 text-primary" />
+                  <span className="text-sm font-semibold text-primary">In Simple Terms</span>
                 </div>
-                <p className="text-foreground/90">{laymanExplanation}</p>
+                <p className="text-foreground/90 leading-relaxed">{laymanExplanation}</p>
               </div>
             )}
             

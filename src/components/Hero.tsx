@@ -1,10 +1,8 @@
 import { MessageSquare, ArrowRight } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 
-interface HeroProps {
-  onOpenChat: () => void;
-}
-
-export default function Hero({ onOpenChat }: HeroProps) {
+export default function Hero() {
+  const navigate = useNavigate();
   return (
     <section className="relative min-h-screen flex items-center justify-center overflow-hidden">
       {/* Animated Background Gradient */}
@@ -35,10 +33,10 @@ export default function Hero({ onOpenChat }: HeroProps) {
           </p>
           
           <button
-            onClick={onOpenChat}
+            onClick={() => navigate("/chat")}
             className="group inline-flex items-center gap-3 px-8 py-4 bg-primary text-primary-foreground rounded-xl text-lg font-semibold hover:bg-primary/90 transition-all hover:shadow-glow animate-fade-in animation-delay-400"
           >
-            Ask a Legal Question
+            Start Chatting
             <ArrowRight className="h-5 w-5 group-hover:translate-x-1 transition-transform" />
           </button>
           
