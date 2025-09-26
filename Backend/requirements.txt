@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+sentence-transformers
+faiss-cpu
+requests
+pydantic
+tqdm
+python-multipart
+PyPDF2
