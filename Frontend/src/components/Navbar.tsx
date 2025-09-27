@@ -1,12 +1,14 @@
 import { useState, useEffect } from "react";
 import { Scale, MessageSquare, LogOut } from "lucide-react";
 import { useNavigate } from "react-router-dom";
-import { useAuth, signOut } from "@/contexts/AuthContext"; // Assuming contexts are in @/contexts
+import { useAuthContext } from "@/contexts/AuthContext";
+import { signOut } from "firebase/auth";
+import { auth } from "@/firebase-config";
 
 export default function Navbar() {
   const [isScrolled, setIsScrolled] = useState(false);
   const navigate = useNavigate();
-  const { currentUser } = useAuth();
+  const { currentUser } = useAuthContext();
 
   useEffect(() => {
     const handleScroll = () => {
@@ -18,7 +20,7 @@ export default function Navbar() {
 
   const handleSignOut = async () => {
     try {
-      await signOut();
+      await signOut(auth);
       navigate('/login');
     } catch (error) {
       console.error("Failed to sign out", error);
@@ -50,10 +52,10 @@ export default function Navbar() {
                 <button 
                   onClick={() => navigate("/chat")}
                   className="flex items-center gap-2 px-6 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-all hover:shadow-glow"
-                >
+                > 
                   <MessageSquare className="h-4 w-4" />
                   <span>Open Chat</span>
-                </button>
+                </button> 
                 <button onClick={handleSignOut} className="text-foreground/80 hover:text-primary transition-colors p-2 rounded-full">
                   <LogOut className="h-5 w-5" />
                 </button>
@@ -74,10 +76,10 @@ export default function Navbar() {
                 <button 
                   onClick={() => navigate("/chat")}
                   className="flex items-center gap-2 px-6 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-all hover:shadow-glow"
-                >
+                > 
                   <MessageSquare className="h-4 w-4" />
                   <span>Open Chat</span>
-                </button>
+                </button> 
               </>
             )}
           </div>

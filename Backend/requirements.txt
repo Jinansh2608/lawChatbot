@@ -1,9 +1,9 @@
-fastapi
-uvicorn
+numpy
+flask
+flask-cors
 sentence-transformers
 faiss-cpu
-requests
-pydantic
-tqdm
-python-multipart
+google-generativeai
+python-dotenv
+waitress
 PyPDF2

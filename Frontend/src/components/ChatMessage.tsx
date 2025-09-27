@@ -1,116 +1,197 @@
-import { User, Bot, Scale, FileText, Heart } from "lucide-react";
+import { Bot, User, Scale, BookOpen, FileText } from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import { useAuthContext } from "@/contexts/AuthContext";
+import { Message } from "@/contexts/ChatContext";
+import { cn } from "@/lib/utils";
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion";
 
-interface ChatMessageProps {
-  message: string;
-  sender: "user" | "bot";
-  legalAnswer?: string;
-  laymanExplanation?: string;
-  sources?: number[];
-  isTyping?: boolean;
-  timestamp: Date;
-}
-
-export default function ChatMessage({
-  message,
+const ChatMessage = ({
   sender,
-  legalAnswer,
-  laymanExplanation,
-  sources,
+  message,
+  sections,
   isTyping,
-  timestamp
-}: ChatMessageProps) {
-  const formatTime = (date: Date) => {
-    return new Date(date).toLocaleTimeString('en-US', { 
-      hour: '2-digit', 
-      minute: '2-digit' 
-    });
-  };
-  if (sender === "user") {
-    return (
-      <div className="flex gap-3 animate-fade-in">
-        <div className="w-9 h-9 rounded-full bg-secondary flex items-center justify-center flex-shrink-0">
-          <User className="h-5 w-5 text-muted-foreground" />
-        </div>
-        <div className="flex-1">
-          <div className="flex items-baseline gap-2 mb-1">
-            <span className="text-sm font-medium">You</span>
-            <span className="text-xs text-muted-foreground">{formatTime(timestamp)}</span>
-          </div>
-          <div className="message-user rounded-2xl px-4 py-3 inline-block max-w-[85%]">
-            <p>{message}</p>
-          </div>
-        </div>
-      </div>
-    );
-  }
+  timestamp,
+}: Message) => {
+  const isBot = sender === "bot";
+  const { currentUser } = useAuthContext();
 
   return (
-    <div className="flex gap-3 animate-fade-in">
-      <div className="w-9 h-9 rounded-full bg-gradient-to-br from-primary/30 to-accent/20 flex items-center justify-center flex-shrink-0">
-        <Scale className="h-5 w-5 text-primary" />
+    <div
+      className={cn(
+        "flex items-start gap-4 animate-fade-in",
+        isBot ? "flex-row" : "flex-row-reverse"
+      )}
+    >
+      {/* Avatar */}
+      <div
+        className={cn(
+          "flex h-8 w-8 shrink-0 items-center justify-center rounded-full",
+          isBot ? "bg-primary text-primary-foreground" : "bg-secondary"
+        )}
+      >
+        {isBot ? (
+          <Bot size={20} />
+        ) : (
+          <img
+            src={currentUser?.photoURL || ""}
+            alt="You"
+            className="h-full w-full rounded-full"
+          />
+        )}
       </div>
-      <div className="flex-1">
-        <div className="flex items-baseline gap-2 mb-1">
-          <span className="text-sm font-medium text-primary">LawGPT</span>
-          <Heart className="h-3 w-3 text-primary/60" />
-          {!isTyping && <span className="text-xs text-muted-foreground">{formatTime(timestamp)}</span>}
-        </div>
+
+      {/* Message box */}
+      <div
+        className={cn(
+          "w-full max-w-2xl space-y-3 rounded-xl px-4 py-3",
+          isBot ? "bg-secondary" : "bg-primary text-primary-foreground"
+        )}
+      >
+        {/* Typing indicator */}
         {isTyping ? (
-          <div className="message-bot rounded-2xl px-4 py-3 inline-block">
-            <div className="flex gap-2">
-              <span className="w-2 h-2 bg-primary/60 rounded-full animate-typing" />
-              <span className="w-2 h-2 bg-primary/60 rounded-full animate-typing animation-delay-200" />
-              <span className="w-2 h-2 bg-primary/60 rounded-full animate-typing animation-delay-400" />
-            </div>
+          <div className="flex items-center gap-2">
+            <span className="h-2 w-2 animate-pulse rounded-full bg-muted-foreground" />
+            <span className="h-2 w-2 animate-pulse rounded-full bg-muted-foreground delay-150" />
+            <span className="h-2 w-2 animate-pulse rounded-full bg-muted-foreground delay-300" />
           </div>
         ) : (
-          <div className="space-y-3">
-            {/* Legal Answer */}
-            {legalAnswer && (
-              <div className="legal-box">
-                <div className="flex items-center gap-2 mb-2">
-                  <FileText className="h-4 w-4 text-primary" />
-                  <span className="text-sm font-semibold text-primary">Legal Answer</span>
-                </div>
-                <p className="text-sm text-foreground/90">{legalAnswer}</p>
+          <>
+            {message && (
+              <div
+                className={cn(
+                  "prose prose-sm dark:prose-invert max-w-none prose-p:text-current",
+                  isBot ? "" : "text-primary-foreground"
+                )}
+              />
+            )}
+            {/* Message content */}
+            <div
+              className={cn(
+                "prose prose-sm dark:prose-invert max-w-none prose-p:text-current",
+                isBot ? "" : "text-primary-foreground"
+              )}
+            >
+              <ReactMarkdown>{message}</ReactMarkdown>
+            </div>
+
+            {/* Sections accordion */}
+            {sections && sections.length > 0 && (
+              <div className="space-y-2 pt-2">
+                <h4
+                  className={cn(
+                    "text-xs font-semibold uppercase tracking-wider",
+                    isBot ? "text-muted-foreground" : "text-primary-foreground/70"
+                  )}
+                >
+                  Relevant Sections
+                </h4>
+
+                <Accordion type="single" collapsible className="w-full">
+                  {sections.map((section) => (
+                    <AccordionItem
+                      key={section.id}
+                      value={`item-${section.id}`}
+                      className={cn(
+                        "rounded-lg border px-3",
+                        isBot
+                          ? "bg-background/50 border-border"
+                          : "bg-primary-foreground/10 border-primary-foreground/20"
+                      )}
+                    >
+                      <AccordionTrigger
+                        className={cn(
+                          "py-2 text-sm font-medium hover:no-underline",
+                          isBot ? "" : "text-primary-foreground"
+                        )}
+                      >
+                        {section.title}
+                      </AccordionTrigger>
+
+                      <AccordionContent className="space-y-4 px-1 pb-3">
+                        {/* Layman Explanation */}
+                        {section.layman_explanation && (
+                          <div>
+                            <div
+                              className={cn(
+                                "mb-1 flex items-center gap-2 text-xs",
+                                isBot
+                                  ? "text-muted-foreground"
+                                  : "text-primary-foreground/80"
+                              )}
+                            >
+                              <BookOpen className="h-3 w-3" />
+                              <span>Simple Explanation</span>
+                            </div>
+                            <div className="prose prose-sm dark:prose-invert max-w-none leading-relaxed text-foreground/90">
+                              <ReactMarkdown>
+                                {section.layman_explanation}
+                              </ReactMarkdown>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Example */}
+                        {section.example && (
+                          <div>
+                            <div
+                              className={cn(
+                                "mb-1 flex items-center gap-2 text-xs",
+                                isBot
+                                  ? "text-muted-foreground"
+                                  : "text-primary-foreground/80"
+                              )}
+                            >
+                              <Scale className="h-3 w-3" />
+                              <span>Example</span>
+                            </div>
+                            <div className="prose prose-sm dark:prose-invert max-w-none leading-relaxed text-foreground/90">
+                              <ReactMarkdown>{section.example}</ReactMarkdown>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Full Legal Text */}
+                        {section.legal_text && (
+                          <div>
+                            <div
+                              className={cn(
+                                "mb-1 flex items-center gap-2 text-xs",
+                                isBot
+                                  ? "text-muted-foreground"
+                                  : "text-primary-foreground/80"
+                              )}
+                            >
+                              <FileText className="h-3 w-3" />
+                              <span>Full Legal Text</span>
+                            </div>
+                            <div
+                              className={cn(
+                                "prose prose-sm dark:prose-invert max-w-none whitespace-pre-wrap rounded-md p-3 font-mono text-xs leading-relaxed",
+                                isBot
+                                  ? "bg-muted text-foreground/80"
+                                  : "bg-black/20 text-primary-foreground/90"
+                              )}
+                            >
+                              {section.legal_text}
+                            </div>
+                          </div>
+                        )}
+                      </AccordionContent>
+                    </AccordionItem>
+                  ))}
+                </Accordion>
               </div>
             )}
-            
-            {/* Layman Explanation */}
-            {laymanExplanation && (
-              <div className="layman-box">
-                <div className="flex items-center gap-2 mb-2">
-                  <Heart className="h-4 w-4 text-primary" />
-                  <span className="text-sm font-semibold text-primary">In Simple Terms</span>
-                </div>
-                <p className="text-foreground/90 leading-relaxed">{laymanExplanation}</p>
-              </div>
-            )}
-            
-            {/* If only message (welcome or error messages) */}
-            {!legalAnswer && !laymanExplanation && (
-              <div className="message-bot rounded-2xl px-4 py-3">
-                <p>{message}</p>
-              </div>
-            )}
-            
-            {/* Sources */}
-            {sources && sources.length > 0 && (
-              <div className="flex flex-wrap gap-2 mt-2">
-                <span className="text-xs text-muted-foreground">References:</span>
-                {sources.map((source, idx) => (
-                  <span
-                    key={idx}
-                    className="text-xs px-2 py-1 bg-primary/10 text-primary rounded-md"
-                  >
-                    IPC {source}
-                  </span>
-                ))}
-              </div>
-            )}
-          </div>
+          </>
         )}
       </div>
     </div>
   );
-}
+};
+
+export default ChatMessage;

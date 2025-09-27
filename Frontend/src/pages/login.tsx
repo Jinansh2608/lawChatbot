@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
 import { signInWithEmailAndPassword, GoogleAuthProvider, signInWithPopup } from 'firebase/auth';
-import { auth } from '../firebase-config'; // Adjust this path to your firebase config file
+import { auth, db } from '../firebase-config'; // Adjust this path to your firebase config file
 import { useNavigate, Link } from 'react-router-dom';
 import { Scale } from 'lucide-react';
+import { doc, setDoc, getDoc } from 'firebase/firestore';
 
 const Login = () => {
     const navigate = useNavigate();
@@ -17,7 +18,7 @@ const Login = () => {
             .then((userCredential) => {
                 // Signed in
                 console.log(userCredential.user);
-                navigate('/'); // Redirect to home page or dashboard
+                navigate('/chat'); // Redirect to chat page
             })
             .catch((error) => {
                 const errorMessage = error.message;
@@ -26,26 +27,41 @@ const Login = () => {
             });
     };
 
-    const onGoogleLogin = (e: React.MouseEvent<HTMLButtonElement>) => {
+    const onGoogleLogin = async (e: React.MouseEvent<HTMLButtonElement>) => {
         e.preventDefault();
         setError('');
         const provider = new GoogleAuthProvider();
-        signInWithPopup(auth, provider)
-            .then((result) => {
-                // This gives you a Google Access Token. You can use it to access the Google API.
-                const credential = GoogleAuthProvider.credentialFromResult(result);
-                if (credential) {
-                    // const token = credential.accessToken;
-                }
-                // The signed-in user info.
-                console.log(result.user);
-                navigate('/');
-            }).catch((error) => {
-                // Handle Errors here.
-                const errorMessage = error.message;
-                console.error(error.code, errorMessage);
-                setError("Failed to sign in with Google. Please try again.");
-            });
+        try {
+            const result = await signInWithPopup(auth, provider);
+            const user = result.user;
+
+            // Check if user document exists, if not, create it
+            const userDocRef = doc(db, "users", user.uid);
+            const userDoc = await getDoc(userDocRef);
+
+            if (!userDoc.exists()) {
+                await setDoc(userDocRef, {
+                    email: user.email,
+                    displayName: user.displayName,
+                    photoURL: user.photoURL,
+                    createdAt: new Date(),
+                });
+            }
+            
+            navigate('/chat');
+        } catch (error: unknown) {
+            let errorMessage = "An unknown error occurred.";
+            let errorCode = "";
+            if (error instanceof Error) {
+                errorMessage = error.message;
+            }
+            // For Firebase errors, error may have a 'code' property
+            if (typeof error === "object" && error !== null && "code" in error) {
+                errorCode = (error as { code: string }).code;
+            }
+            console.error(errorCode, errorMessage);
+            setError("Failed to sign in with Google. Please try again.");
+        }
     }
 
     return (
@@ -92,6 +108,11 @@ const Login = () => {
                             </button>
                         </div>
                     </form>
+                    <div className="text-right text-sm">
+                        <Link to="#" className="font-medium text-muted-foreground hover:text-primary">
+                            Forgot password?
+                        </Link>
+                    </div>
 
                     <div className="relative my-6">
                         <div className="absolute inset-0 flex items-center">

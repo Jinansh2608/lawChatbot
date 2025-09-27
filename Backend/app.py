@@ -1,169 +1,249 @@
+#!/usr/bin/env python3
+"""
+Indian Law Chatbot API (FAISS + Hugging Face + Layman Explanation)
+Optimized, production-ready, and fully clean output.
+"""
+
 import os
 import json
 import logging
+import re
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+
 import numpy as np
-from flask import Flask, request, jsonify
+from flask import Flask, jsonify, request
 from flask_cors import CORS
 from sentence_transformers import SentenceTransformer
 import faiss
-from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, pipeline
+from transformers import pipeline
 from dotenv import load_dotenv
 from waitress import serve
 
 # ---------------------------
-# Setup & Config
+# Load env & logging
 # ---------------------------
 load_dotenv()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger(__name__)
 
+# ---------------------------
+# Configuration
+# ---------------------------
+@dataclass
 class Config:
-    HF_API_KEY = os.getenv("HUGGINGFACE_API_KEY")
-    EMBEDDER_MODEL = os.getenv("EMBEDDER_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
-    GENERATOR_MODEL = os.getenv("GENERATOR_MODEL", "google/flan-t5-large")
-    FAISS_INDEX_PATH = os.getenv("FAISS_INDEX_PATH", "data/faiss.index")
-    META_PATH = os.getenv("META_PATH", "data/meta.npy")
-    TOP_K = int(os.getenv("TOP_K", 3))
-    MAX_SECTION_CHARS = int(os.getenv("MAX_SECTION_CHARS", 800))
-    CORS_ORIGINS = os.getenv("CORS_ORIGINS", "*").split(",")
-    FLASK_ENV = os.getenv("FLASK_ENV", "development")
-    DEVICE = int(os.getenv("DEVICE", "-1"))  # -1 = CPU, 0 = GPU
+    HUGGINGFACE_API_KEY: Optional[str] = os.getenv("HUGGINGFACE_API_KEY")
+    EMBEDDER_MODEL: str = os.getenv("EMBEDDER_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
+    FAISS_INDEX_PATH: str = os.getenv("FAISS_INDEX_PATH", "data/faiss.index")
+    META_PATH: str = os.getenv("META_PATH", "data/meta.npy")
+    TOP_K: int = int(os.getenv("TOP_K", 3))
+    MAX_SECTION_CHARS: int = int(os.getenv("MAX_SECTION_CHARS", 1500))
+    CORS_ORIGINS: List[str] = field(default_factory=lambda: os.getenv("CORS_ORIGINS", "*").split(","))
+    FLASK_ENV: str = os.getenv("FLASK_ENV", "development")
+    DEVICE: int = int(os.getenv("DEVICE", -1))  # -1=CPU, >=0 GPU
+    RETRIEVE_MULTIPLIER: int = int(os.getenv("RETRIEVE_MULTIPLIER", 5))
+    SIMILARITY_THRESHOLD: float = float(os.getenv("SIMILARITY_THRESHOLD", 0.2))
+    MAX_GENERATION_TOKENS: int = int(os.getenv("MAX_GENERATION_TOKENS", 256))
+    QUERY_EMBED_CACHE_SIZE: int = int(os.getenv("QUERY_EMBED_CACHE_SIZE", 512))
 
+cfg = Config()
 Path("data").mkdir(exist_ok=True)
+
+# ---------------------------
+# Helper utilities
+# ---------------------------
+def l2_normalize(vec: np.ndarray, eps: float = 1e-8) -> np.ndarray:
+    if vec.ndim == 1:
+        return vec / (np.linalg.norm(vec) + eps)
+    return vec / (np.linalg.norm(vec, axis=1, keepdims=True) + eps)
+
+class QueryEmbedCache:
+    """Simple LRU cache for query embeddings."""
+    def __init__(self, max_size: int = 512):
+        self.max_size = max_size
+        self._store: Dict[str, np.ndarray] = {}
+        self._order: List[str] = []
+
+    def get(self, q: str) -> Optional[np.ndarray]:
+        if q in self._store:
+            self._order.remove(q)
+            self._order.insert(0, q)
+            return self._store[q]
+        return None
+
+    def set(self, q: str, emb: np.ndarray) -> None:
+        if q in self._store:
+            self._order.remove(q)
+        self._store[q] = emb
+        self._order.insert(0, q)
+        if len(self._order) > self.max_size:
+            old = self._order.pop()
+            del self._store[old]
+
+query_cache = QueryEmbedCache(cfg.QUERY_EMBED_CACHE_SIZE)
 
 # ---------------------------
 # Load FAISS index & metadata
 # ---------------------------
-def load_faiss_and_meta(index_path, meta_path):
+def load_faiss_and_meta(index_path: str, meta_path: str) -> Tuple[faiss.Index, List[Any]]:
     if not os.path.exists(index_path) or not os.path.exists(meta_path):
         raise FileNotFoundError("❌ FAISS index or metadata not found. Run indexing.py first.")
-    logging.info(f"Loading FAISS index from {index_path}")
+    logger.info(f"📥 Loading FAISS index from {index_path}")
     index = faiss.read_index(index_path)
-    texts = list(np.load(meta_path, allow_pickle=True))
-    logging.info(f"✅ Loaded {len(texts)} legal sections")
-    return index, texts
+    logger.info("📥 Loading metadata...")
+    meta = list(np.load(meta_path, allow_pickle=True))
+    logger.info(f"✅ Loaded {len(meta)} sections")
+    return index, meta
 
 # ---------------------------
-# Initialize embedder and FAISS
+# Initialize models
 # ---------------------------
-logging.info("Initializing sentence embedder...")
-embedder = SentenceTransformer(Config.EMBEDDER_MODEL)
-index, ipc_texts = load_faiss_and_meta(Config.FAISS_INDEX_PATH, Config.META_PATH)
+logger.info("🚀 Initializing SentenceTransformer...")
+embedder = SentenceTransformer(cfg.EMBEDDER_MODEL)
+index, ipc_meta = load_faiss_and_meta(cfg.FAISS_INDEX_PATH, cfg.META_PATH)
+
+logger.info("🤖 Initializing Hugging Face generator...")
+generator = pipeline(
+    task="text2text-generation",
+    model=os.getenv("GENERATOR_MODEL", "google/flan-t5-large"),
+    device=cfg.DEVICE if cfg.DEVICE >= 0 else -1
+)
 
 # ---------------------------
-# Load Hugging Face Generator
+# Retrieval logic
 # ---------------------------
-if not Config.HF_API_KEY:
-    raise ValueError("❌ HUGGINGFACE_API_KEY missing in .env")
+def encode_query(query: str) -> np.ndarray:
+    cached = query_cache.get(query)
+    if cached is not None:
+        return cached
+    emb = embedder.encode([query], convert_to_numpy=True)[0].astype("float32")
+    emb = l2_normalize(emb)
+    query_cache.set(query, emb)
+    return emb
 
-logging.info(f"Loading generator model: {Config.GENERATOR_MODEL}")
-tokenizer = AutoTokenizer.from_pretrained(Config.GENERATOR_MODEL, use_auth_token=Config.HF_API_KEY)
-model = AutoModelForSeq2SeqLM.from_pretrained(Config.GENERATOR_MODEL, use_auth_token=Config.HF_API_KEY)
-generator = pipeline("text2text-generation", model=model, tokenizer=tokenizer, device=Config.DEVICE)
-logging.info("✅ Generator ready.")
+def retrieve(query: str) -> List[Dict[str, Any]]:
+    query = query.strip()
+    if not query:
+        return []
 
-# ---------------------------
-# Retrieve top-k sections
-# ---------------------------
-def retrieve(query, top_k=Config.TOP_K, max_chars=Config.MAX_SECTION_CHARS, similarity_threshold=0.3):
-    q_emb = embedder.encode([query], convert_to_numpy=True).astype("float32")
-    D, I = index.search(q_emb, top_k*5)  # retrieve more, filter by similarity
+    q_emb = encode_query(query).reshape(1, -1)
+    search_k = max(cfg.RETRIEVE_MULTIPLIER * cfg.TOP_K, cfg.TOP_K + 1)
+    D, I = index.search(q_emb, search_k)
 
     results = []
-    for score, idx in zip(D[0], I[0]):
-        if score < similarity_threshold:
+    for dist, idx in zip(D[0], I[0]):
+        if idx < 0 or idx >= len(ipc_meta):
             continue
-        text = ipc_texts[idx]
-        if len(text) > max_chars:
-            text = text[:max_chars] + "...\n[truncated]"
-        results.append({"id": int(idx), "text": text})
-        if len(results) >= top_k:
+
+        meta_item = ipc_meta[idx]
+        text = meta_item["text"] if isinstance(meta_item, dict) else str(meta_item)
+        results.append({
+            "id": int(idx),
+            "text": text[:cfg.MAX_SECTION_CHARS] + ("...\n[truncated]" if len(text) > cfg.MAX_SECTION_CHARS else ""),
+            "full_text": text
+        })
+        if len(results) >= cfg.TOP_K:
             break
+
     return results
 
 # ---------------------------
-# Build prompt with layman explanation
+# Hugging Face JSON extraction
 # ---------------------------
-def build_prompt(user_query, retrieved_chunks):
-    chunks_text = "\n\n---\n\n".join([f"[{c['id']}] {c['text']}" for c in retrieved_chunks])
-    return f"""
-You are an expert Indian law assistant.
-Answer STRICTLY using the provided IPC sections.
-
-Provide JSON with keys:
-- title: Short title for the query
-- summary_plain: One-line legal summary
-- legal_answer: Detailed legal explanation
-- layman_explanation: Simple explanation for non-lawyers
-- sources: List of section IDs used
-
-RETRIEVED SECTIONS:
-{chunks_text}
-
-QUESTION: {user_query}
-"""
+def extract_json(text: str) -> dict:
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        # Remove redundant labels
+        text_clean = re.sub(r'(?i)\blayman_explanation\s*:\s*', '', text)
+        text_clean = re.sub(r'(?i)\bexample\s*:\s*', '', text_clean)
+        start, end = text_clean.find("{"), text_clean.rfind("}")
+        if start != -1 and end != -1:
+            try:
+                return json.loads(text_clean[start:end+1])
+            except:
+                pass
+        return {"layman_explanation": text_clean.strip(), "example": ""}
 
 # ---------------------------
-# Generate structured answer
+# Generate layman explanation
 # ---------------------------
-def generate_answer_for_query(query):
+def generate_layman(section_text: str, section_id: int) -> Dict[str, str]:
+    text_snippet = section_text[:cfg.MAX_SECTION_CHARS]
+    prompt = (
+        f"You are a legal assistant. Explain the following legal section in plain English "
+        f"for a layperson and provide a short example.\n\n"
+        f"Respond ONLY in valid JSON with two keys: 'layman_explanation' and 'example'.\n\n"
+        f"Legal Section (ID: {section_id}):\n{text_snippet}"
+    )
+    try:
+        out = generator(prompt, max_new_tokens=cfg.MAX_GENERATION_TOKENS, do_sample=False)
+        raw = out[0].get("generated_text", "").strip()
+        return extract_json(raw)
+    except Exception as e:
+        logger.error(f"❌ Error generating layman explanation for section {section_id}: {e}")
+        return {"layman_explanation": "[Error generating explanation]", "example": ""}
+
+# ---------------------------
+# Full RAG pipeline
+# ---------------------------
+def generate_answer_for_query(query: str) -> Dict[str, Any]:
     retrieved = retrieve(query)
     if not retrieved:
-        return {"error": "Answer not available in the provided sections."}, "none"
+        return {"query": query, "summary_plain": "No relevant sections found", "sections": [], "final_answer": ""}
 
-    prompt = build_prompt(query, retrieved)
-    logging.info("🔍 Generating legal response...")
-    out = generator(prompt, max_new_tokens=500, do_sample=False)
-    raw = out[0]["generated_text"].strip()
+    sections = []
+    final_parts = []
 
-    # Parse JSON safely
-    try:
-        json_part = raw[raw.find("{"):] if "{" in raw else raw
-        parsed = json.loads(json_part)
-        if "sources" not in parsed:
-            parsed["sources"] = [c["id"] for c in retrieved]
-        if "layman_explanation" not in parsed:
-            parsed["layman_explanation"] = "In simple words, this is the legal position based on retrieved IPC sections."
-        return parsed, "rag"
-    except json.JSONDecodeError:
-        logging.warning("⚠️ Model returned non-JSON. Falling back to manual structure.")
-        return {
-            "title": "Legal Query",
-            "summary_plain": "Answer derived from retrieved sections.",
-            "legal_answer": raw,
-            "layman_explanation": "In simple words, this is the legal position based on retrieved IPC sections.",
-            "sources": [c["id"] for c in retrieved]
-        }, "rag_text"
+    for r in retrieved:
+        layman = generate_layman(r["full_text"], r["id"])
+        sections.append({
+            "id": r["id"],
+            "title": f"Section {r['id']}",
+            "legal_text": r["text"],
+            "layman_explanation": layman["layman_explanation"],
+            "example": layman["example"]
+        })
+        final_parts.append(
+            f"📘 {sections[-1]['title']}:\nLayman: {layman['layman_explanation']}\nExample: {layman['example']}\n"
+        )
+
+    return {
+        "query": query,
+        "summary_plain": "Answer based on retrieved IPC sections.",
+        "sections": sections,
+        "final_answer": "\n".join(final_parts)
+    }
 
 # ---------------------------
 # Flask API
 # ---------------------------
-def create_app():
+def create_app() -> Flask:
     app = Flask(__name__)
-    CORS(app, resources={r"/*": {"origins": Config.CORS_ORIGINS}})
-
-    @app.route("/chat", methods=["POST"])
-    def chat():
-        data = request.json or {}
-        query = data.get("query", "").strip()
-        if not query:
-            return jsonify({"error": "Query is required"}), 400
-
-        try:
-            answer, mode = generate_answer_for_query(query)
-            return jsonify({
-                "query": query,
-                "mode": mode,
-                "response": answer,
-                "context_used": retrieve(query)
-            })
-        except Exception as e:
-            logging.exception("❌ Error in /chat")
-            return jsonify({"error": f"Internal server error: {str(e)}"}), 500
+    CORS(app, resources={r"/*": {"origins": cfg.CORS_ORIGINS}})
+    app.config["JSON_SORT_KEYS"] = False
 
     @app.route("/", methods=["GET"])
     def home():
-        return jsonify({"message": "✅ Indian Law Chatbot API with FAISS + RAG + Layman Explanation"})
+        return jsonify({"message": "✅ Indian Law Chatbot API running"}), 200
+
+    @app.route("/ping", methods=["GET"])
+    def ping():
+        return jsonify({"ok": True}), 200
+
+    @app.route("/chat", methods=["POST"])
+    def chat():
+        data = request.get_json(silent=True) or {}
+        query = (data.get("query") or "").strip()
+        if not query:
+            return jsonify({"error": "Query is required"}), 400
+        try:
+            response = generate_answer_for_query(query)
+            return jsonify({"query": query, "response": response}), 200
+        except Exception as e:
+            logger.exception("Unhandled /chat error: %s", e)
+            return jsonify({"error": "Internal server error"}), 500
 
     return app
 
@@ -172,9 +252,9 @@ def create_app():
 # ---------------------------
 if __name__ == "__main__":
     app = create_app()
-    if Config.FLASK_ENV.lower() == "production":
-        logging.info("🚀 Starting production server on port 5000...")
+    if cfg.FLASK_ENV.lower() == "production":
+        logger.info("🚀 Starting production server on port 5000...")
         serve(app, host="0.0.0.0", port=5000)
     else:
-        logging.info("🧪 Starting development server...")
+        logger.info("🧪 Starting dev server at http://0.0.0.0:5000")
         app.run(host="0.0.0.0", port=5000, debug=True)

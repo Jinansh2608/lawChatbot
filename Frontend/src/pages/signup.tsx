@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
-import { createUserWithEmailAndPassword, GoogleAuthProvider, signInWithPopup } from 'firebase/auth';
-import { auth } from '../firebase-config';
+import { createUserWithEmailAndPassword, GoogleAuthProvider, signInWithPopup, updateProfile } from 'firebase/auth';
+import { auth, db } from '../firebase-config';
 import { useNavigate, Link } from 'react-router-dom';
 import { Scale } from 'lucide-react';
+import { doc, setDoc, getDoc } from 'firebase/firestore';
 
 const Signup = () => {
     const navigate = useNavigate();
@@ -13,33 +14,65 @@ const Signup = () => {
     const onSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         setError('');
-        await createUserWithEmailAndPassword(auth, email, password)
-            .then((userCredential) => {
-                // Signed in
-                console.log(userCredential.user);
-                navigate('/'); // Redirect to home on successful signup
-            })
-            .catch((error) => {
-                const errorMessage = error.message;
-                console.error(error.code, errorMessage);
-                setError(errorMessage);
+        try {
+            const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+            const user = userCredential.user;
+            const displayName = user.email?.split('@')[0] || 'New User';
+            const photoURL = `https://api.dicebear.com/7.x/bottts/svg?seed=${user.uid}`;
+
+            // Update Firebase Auth profile
+            await updateProfile(user, { displayName, photoURL });
+
+            // Create user document in Firestore
+            const userDocRef = doc(db, "users", user.uid);
+            await setDoc(userDocRef, {
+                email: user.email,
+                displayName: displayName,
+                photoURL: photoURL,
+                createdAt: new Date(),
             });
+
+            navigate('/chat'); // Redirect to chat on successful signup
+        } catch (error: unknown) {
+            let errorMessage = "An unknown error occurred during sign up.";
+            if (error instanceof Error) {
+                errorMessage = error.message;
+            }
+            console.error("Signup error:", error);
+            setError(errorMessage);
+        }
     };
 
-    const onGoogleSignup = (e: React.MouseEvent<HTMLButtonElement>) => {
+    const onGoogleSignup = async (e: React.MouseEvent<HTMLButtonElement>) => {
         e.preventDefault();
         setError('');
         const provider = new GoogleAuthProvider();
-        signInWithPopup(auth, provider)
-            .then((result) => {
-                console.log(result.user);
-                navigate('/');
-            }).catch((error) => {
-                const errorMessage = error.message;
-                console.error(error.code, errorMessage);
-                // Display the actual error message from Firebase
-                setError(errorMessage);
-            });
+        try {
+            const result = await signInWithPopup(auth, provider);
+            const user = result.user;
+
+            // Check if user document exists, if not, create it
+            const userDocRef = doc(db, "users", user.uid);
+            const userDoc = await getDoc(userDocRef);
+
+            if (!userDoc.exists()) {
+                await setDoc(userDocRef, {
+                    email: user.email,
+                    displayName: user.displayName,
+                    photoURL: user.photoURL,
+                    createdAt: new Date(),
+                });
+            }
+            
+            navigate('/chat');
+        } catch (error: unknown) {
+            let errorMessage = "An unknown error occurred.";
+            if (error instanceof Error) {
+                errorMessage = error.message;
+            }
+            console.error("Google signup error:", error);
+            setError("Failed to sign up with Google. Please try again.");
+        }
     }
 
     return (
@@ -106,7 +139,7 @@ const Signup = () => {
                     </div>
 
                     <p className="mt-6 text-sm text-center text-muted-foreground">
-                        Already have an account?{' '}
+                        Already have an account?
                         <Link to="/login" className="font-medium text-primary hover:text-primary/90">
                             Sign in
                         </Link>

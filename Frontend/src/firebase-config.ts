@@ -1,12 +1,13 @@
-// Import the functions you need from the SDKs you need
+// firebase.ts
 import { initializeApp } from "firebase/app";
 import { getAuth } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
-// TODO: Add SDKs for Firebase products that you want to use
-// https://firebase.google.com/docs/web/setup#available-libraries
 
-// Your web app's Firebase configuration
-// For Firebase JS SDK v7.20.0 and later, measurementId is optional
+// Ensure all env variables exist
+if (!import.meta.env.VITE_FIREBASE_API_KEY) {
+  throw new Error("Missing Firebase API Key in .env file");
+}
+
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
   authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
@@ -21,3 +22,6 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 export const db = getFirestore(app);
+
+// Optional: check if Firestore initialized
+console.log("Firebase initialized:", { app, auth, db });
